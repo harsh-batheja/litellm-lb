@@ -1,201 +1,64 @@
-# litellm-lb
+# v2 — slim OAuth-proxy workers
 
-A LiteLLM load-balancer stack that pools multiple Claude Code OAuth subscriptions behind a single API surface, routes `claude-*` requests through a **direct OAuth pass-through** to `api.anthropic.com`, and also exposes Z.AI (`glm/*`) and ChatGPT (`gpt/*`) models.
+**Status: prototype, not yet validated on hardware.** Everything here is wire-compatible with the v1 deployment's virtual keys, master key, and client-facing API surface — so if v2 works it's a drop-in swap — but nobody has run it end-to-end yet. Read through the trade-offs at the bottom before cutting over.
 
-The interesting custom bit is `worker-image/claude_agent_provider.py`: a LiteLLM `CustomLLM` that forwards requests to Anthropic using the Claude Code subscription's OAuth token, so there's **no subprocess-wrapped inner `claude -p` session** adding ~25 k system-prompt tokens to every turn. This makes the LB usable as a drop-in Anthropic endpoint for your own `claude` CLI (via `ANTHROPIC_BASE_URL`) without doubling your token bill.
+## What changed vs v1
 
-## Architecture
-
-```
-client (e.g. laptop `claude`)
-    │  /v1/messages (Anthropic format)
-    ▼
-┌───────────┐
-│  router   │  LiteLLM proxy (:4000)
-│           │   · round-robin or sticky -a/-b routes
-│           │   · Anthropic / OpenAI / Z.AI upstream splits
-│           │   · virtual-key auth + spend tracking
-└─────┬─────┘
-      │ openai/{sonnet,opus,haiku}
-      ▼
-┌───────────┐        ┌───────────┐
-│  worker1  │        │  worker2  │   each holds ONE Claude Code
-│           │        │           │   OAuth subscription in
-│ claude_   │        │ claude_   │   /home/claude/.claude/
-│ agent_    │        │ agent_    │   .credentials.json
-│ provider  │        │ provider  │
-└─────┬─────┘        └─────┬─────┘
-      │                    │
-      └──────────┬─────────┘
-                 ▼
-         api.anthropic.com/v1/messages
-            Authorization: Bearer <oauth>
-            anthropic-beta: oauth-2025-04-20
-```
-
-Postgres backs LiteLLM's virtual-key and spend tables. The `db` service uses the stock `postgres:16` image; nothing custom in the schema.
-
-## Components and custom pieces
-
-| Path | What it is | Custom? |
+| | v1 | v2 |
 |---|---|---|
-| `docker-compose.yaml` | 4-service stack: db + router + worker1 + worker2 | custom layout |
-| `config-router.yaml` | Model aliases: `{sonnet,opus,haiku}` round-robin, `claude-{opus-4-7,sonnet-4-6,haiku-4-5}` explicit, `-a` / `-b` sticky-per-worker variants, `glm/*` direct to z.ai, `gpt/*` via ChatGPT OAuth | custom |
-| `config-worker.yaml` | Worker registers the `claude-agent-sdk` custom provider and exposes `sonnet`/`opus`/`haiku` aliases that map to it | custom |
-| `worker-image/Dockerfile` | Base `ghcr.io/cabinlab/litellm-claude-code:latest` + `litellm[proxy]==1.83.10` upgrade + `prometheus_client` + `@anthropic-ai/claude-code@latest` npm | custom |
-| `worker-image/claude_agent_provider.py` | The OAuth pass-through provider — **the main custom code** | custom |
+| Worker runtime | LiteLLM proxy (nested) | 150-line FastAPI app (`worker-image-v2/oauth_proxy.py`) |
+| Worker image | ~1.5 GB | ~150 MB |
+| Worker cold start | ~15 s | ~1 s |
+| Worker translates formats | OpenAI chat ↔ Anthropic messages (custom LiteLLM provider) | None — pure Authorization header rewrite, byte-level passthrough |
+| Router talks to worker as | `openai/<short>` chat-completions | `anthropic/<full model id>` messages API |
+| Prisma in the worker? | Yes — caused the "regen after every restart" gotcha | No — router is the only thing with a DB |
+| Router image | Custom (`litellm-lb-worker:local`, used for router too in v1) | Stock `ghcr.io/berriai/litellm:main-v1.83.10` |
 
-Upstream bits we depend on but don't modify: `postgres:16`, the `cabinlab` base image (provides the worker entrypoint that seeds `.credentials.json` from `CLAUDE_CODE_OAUTH_TOKEN`), and the `@anthropic-ai/claude-code` npm package.
+## Why this is better
 
-## Bootstrap on a fresh VM
+- **One format, one hop.** The worker never parses or re-emits a request body. Even vision, extended thinking, tool use, and prompt caching just work — whatever shape Anthropic accepts today, the worker forwards.
+- **Prisma gotcha gone.** The router still has prisma, but we control the router image and can pin / regen in the Dockerfile if needed. Workers are prisma-free.
+- **Image size + cold start.** Workers start in ~1 s (important when docker-compose recreates them or when the LXC reboots).
+- **Fewer moving parts to debug.** Every 500 in v1 required reading LiteLLM's provider plumbing, streaming_iterator.py, and `_wrap_streaming_iterator_with_enrichment`. v2's worker is one file you can `cat`.
 
-### 1. Prereqs
+## Trade-offs (be aware)
 
-```bash
-curl -fsSL https://get.docker.com | sh
-sudo apt-get install -y docker-compose-plugin jq
-```
+1. **ChatGPT (`gpt/*`) routes are commented out** in `config-router.v2.yaml`. The stock LiteLLM image doesn't ship the `chatgpt` provider the v1 stack uses. To keep ChatGPT in v2 you either (a) switch back to a custom router image that bundles it, or (b) register it as a custom provider via the upstream LiteLLM mechanism. Not blocking for Claude + GLM usage.
+2. **No LiteLLM in the worker** = no per-worker spend log, no per-worker `/metrics` endpoint. Spend is tracked by the router as before (against the virtual key). Per-worker success/failure rates can be added later with a FastAPI middleware that emits Prometheus counters — not in this prototype.
+3. **Router depends on the upstream LiteLLM image staying published.** Stock `ghcr.io/berriai/litellm:main-v1.83.10` is what consumers would use; if Berri's registry goes away the user just needs to build from source. v1's `cabinlab/litellm-claude-code` base image had the same risk.
+4. **Provider behavior around `anthropic/` + `api_base`.** This prototype assumes LiteLLM, when configured with `model: anthropic/<id>` and an `api_base`, sends requests in Anthropic `/v1/messages` format to that base URL. That should be the documented behavior but I haven't verified against LiteLLM 1.83.10 specifically — this is step 1 of the validation plan below.
 
-### 2. Place this repo at `/opt/litellm-lb`
+## Side-by-side deployment (for validation)
 
-```bash
-sudo git clone <this-repo-url> /opt/litellm-lb
-cd /opt/litellm-lb
-```
-
-### 3. Fill in the `.env` files
-
-```bash
-cp .env.example               .env
-cp .env.worker1.example       .env.worker1
-cp .env.worker2.example       .env.worker2
-# Edit each file and fill in the values.
-# For LITELLM_MASTER_KEY: `openssl rand -hex 32 | sed 's/^/sk-/'`
-```
-
-### 4. Seed OAuth tokens
-
-There are two ways to populate each worker's OAuth credentials. Pick one per worker.
-
-**(a) Start the worker once with `CLAUDE_CODE_OAUTH_TOKEN`** set in `.env.workerN`. The upstream entrypoint writes `.credentials.json` on first boot. Long-lived tokens are issued by `claude setup-token` from an already-authenticated machine.
-
-**(b) Interactively `claude setup-token` inside the container.** Start the stack with `CLAUDE_CODE_OAUTH_TOKEN` unset; the worker's entrypoint will warn about missing creds but still start. Then:
+The v2 compose file uses a separate named DB volume (`litellm-db-v2`) so v1 and v2 can coexist on the same host for testing. To run v2 on a different port (say 4001 for v2, keep 4000 for v1):
 
 ```bash
-docker compose exec -it worker1 claude setup-token
-# paste token when prompted, follow any browser steps
-docker compose restart worker1
-# repeat for worker2 with the second Claude Code subscription
-```
+# In docker-compose.v2.yaml, change router.ports to ["4001:4000"] and bring up with a distinct project name
+COMPOSE_PROJECT_NAME=litellm-lb-v2 \
+  docker compose -f docker-compose.v2.yaml up -d
 
-**(c) Copy credentials from an existing deployment** (porting case):
-
-```bash
-# on the old host
+# Seed OAuth credentials into v2's own volumes — copy from v1 so both stacks share the same subscriptions
 for w in worker1 worker2; do
-  docker compose exec -T $w \
-    cat /home/claude/.claude/.credentials.json > creds.$w.json
+  docker cp <(docker compose exec -T $w cat /home/claude/.claude/.credentials.json) \
+            litellm-lb-v2-$w-1:/home/claude/.claude/.credentials.json
 done
-
-# on the new host, after first `docker compose up -d`:
-docker compose stop worker1 worker2
-for w in worker1 worker2; do
-  docker cp creds.$w.json litellm-lb-$w-1:/home/claude/.claude/.credentials.json
-  docker exec -u root litellm-lb-$w-1 chown claude:claude \
-    /home/claude/.claude/.credentials.json
-  docker exec -u root litellm-lb-$w-1 chmod 600 \
-    /home/claude/.claude/.credentials.json
-done
-docker compose start worker1 worker2
 ```
 
-### 5. Build and boot
+## Validation plan (before cutover)
 
-```bash
-docker build -t litellm-lb-worker:local ./worker-image
-docker compose up -d
-# wait for router health
-until curl -fsS http://localhost:4000/health/liveliness >/dev/null; do sleep 1; done
-```
+1. Bring up v2 on port 4001 alongside v1 on 4000.
+2. Mint a temporary v2 virtual key on the v2 router (master key + key aliases are separate per DB).
+3. `curl` the v2 router with a known-good request; compare the Anthropic response against the v1 router response. Should be byte-identical.
+4. Streaming test (`"stream": true`) — confirm SSE comes through unchanged, input_tokens are billed correctly.
+5. Tool-use test — send a request with a `tools` array, check that `tool_use` blocks come back and cache_control works.
+6. Sticky routing test — hit `claude-sonnet-4-6-a` 20 times, verify each hits worker1 (check worker access logs).
+7. Run for 24 h; confirm no OAuth expirations or 401 loops.
+8. Cutover: shut v1 down, remap v2's router to port 4000, mint the real virtual keys (or `pg_dump` from v1's DB and restore into v2).
 
-### 6. Prisma regen (**required after every router start**)
+## Open questions / TODOs before production
 
-LiteLLM 1.83.10's schema is newer than the prisma client bindings shipped in the base image. Without this, `/key/generate` and similar admin routes 500 with `FieldNotFoundError: Could not find field at upsertOneLiteLLM_VerificationToken.create.agent_id`.
-
-```bash
-docker compose exec -T router bash -c \
-  "cd /opt/venv/lib/python3.11/site-packages/litellm/proxy && prisma generate"
-docker compose restart router
-```
-
-> Attempts to bake `RUN prisma generate` into the Dockerfile broke the engine-binary lookup at runtime (`NotConnectedError: Not connected to the query engine`). If you find a cleaner solution (e.g. a startup hook running as the `claude` user that regenerates into `$HOME/.cache/prisma-python/`), it'd be worth a PR.
-
-### 7. Mint virtual keys
-
-```bash
-source .env
-
-mint() {
-  local alias=$1 models=$2
-  curl -sS -X POST http://localhost:4000/key/generate \
-    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
-    -H "Content-Type: application/json" \
-    -d "{\"key_alias\":\"$alias\",\"models\":$models}" | jq -r .key
-}
-
-mint claude-code-a '["claude-opus-4-7-a","claude-sonnet-4-6-a","claude-haiku-4-5-a"]'
-mint claude-code-b '["claude-opus-4-7-b","claude-sonnet-4-6-b","claude-haiku-4-5-b"]'
-mint claude-code   '["claude-opus-4-7","claude-sonnet-4-6","claude-haiku-4-5"]'
-# ...plus any other aliases your consumers expect.
-```
-
-Store the returned `sk-...` strings wherever you keep secrets (Infisical, 1Password, a vault, etc.) — the router's Postgres DB can regenerate them but users of the keys won't learn the new value without help.
-
-## Using the LB as a Claude Code endpoint
-
-```bash
-export ANTHROPIC_BASE_URL=http://<host>:4000
-export ANTHROPIC_AUTH_TOKEN=<sk-... from claude-code-a>
-export ANTHROPIC_MODEL=claude-sonnet-4-6-a
-export ANTHROPIC_SMALL_FAST_MODEL=claude-haiku-4-5-a
-claude
-```
-
-Token cost per turn matches a direct Claude Code → Anthropic call (~7.5 k baseline from Claude Code's system prompt + tool definitions; no `claude -p` subprocess 2× multiplier).
-
-## Sticky routing vs round-robin
-
-- **Round-robin** (`claude-sonnet-4-6` with no suffix) — LiteLLM alternates across worker1 and worker2 per request. Good for uniform workloads.
-- **Sticky `-a` / `-b`** — every request for `claude-sonnet-4-6-a` lands on worker1, every `-b` on worker2. Use when one user dominates or when you want to observe which subscription is rate-limiting without noise.
-
-A virtual key's `models` whitelist decides which workers a caller can reach.
-
-## Model catalog (summary)
-
-See `config-router.yaml` for the full list. Top-level families:
-
-- **Claude** — `{sonnet, opus, haiku}` (round-robin), `claude-{opus-4-7, sonnet-4-6, haiku-4-5}` (round-robin), plus `-a` / `-b` sticky variants.
-- **Z.AI GLM** — `glm`, `glm-5.1`, `glm-5`, `glm-4.7{,-flash,-flashx}`, `glm-4.6{,v}`, `glm-4.5{,-air,-flash,v}`, `glm-5-turbo`.
-- **ChatGPT** — `gpt`, `gpt-5.4` (requires the ChatGPT OAuth token volume; see the `router` service's env).
-
-## Known gotchas
-
-- **Prisma schema drift** — see step 6. Happens on every LiteLLM version bump. Manual regen for now.
-- **Streaming** — works, but LiteLLM's `/v1/messages` endpoint emits a duplicate `message_start` event at the top of the SSE stream. Clients ignore it; not a functional issue.
-- **Tokens are long-lived** — the `.credentials.json` file from `claude setup-token` has `expiresAt: 2099-12-31`, i.e. doesn't rotate. If Anthropic ever changes that policy, the provider will need refresh logic (the standard OAuth2 refresh-token grant against `https://platform.claude.com/v1/oauth/token`).
-- **Disk on small LXCs** — fresh image builds need ~2 GB free. If you run this in an LXC with a 4 GB root, raise to 8 GB first.
-
-## Rollback
-
-The old subprocess-based provider (shells out to `claude -p`) is preserved for each deployment as `worker-image/claude_agent_provider.py.subprocess.bak.<ts>`. To revert:
-
-```bash
-cp worker-image/claude_agent_provider.py.subprocess.bak.<ts> \
-   worker-image/claude_agent_provider.py
-docker build -t litellm-lb-worker:local ./worker-image
-docker compose up -d --force-recreate
-```
-
-## License
-
-MIT — do what you want with it.
+- [ ] Write pytest tests for the proxy: header rewrite correctness, 401 retry, SSE passthrough.
+- [ ] Add a GitHub Action that builds the image and runs the tests on PR.
+- [ ] Confirm LiteLLM router sends Anthropic-format bodies when config uses `anthropic/<model>` + `api_base` (documentation implies yes; validate empirically — step 1 above).
+- [ ] Prometheus middleware for per-worker success/error counters.
+- [ ] Token-refresh path: current assumption is that the CLI refreshes the credentials file out-of-band. If/when Anthropic shortens token lifetime, implement refresh using `https://platform.claude.com/v1/oauth/token` inside the proxy (background task + 401 re-read is already there).
