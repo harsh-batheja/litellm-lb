@@ -1,9 +1,14 @@
 # LiteLLM router config. Models expose canonical upstream names only —
-# short aliases (sonnet/opus/haiku/glm/gpt) are intentionally NOT registered
-# so team members use the real model identifier, which stays stable when
-# we upgrade the underlying model version. The `-a` / `-b` suffixes are not
-# aliases — they pin requests to a specific OAuth subscription (worker1 /
-# worker2). Unsuffixed Claude names round-robin across both workers.
+# short aliases removed per team policy. '-a' / '-b' suffixes pin to a
+# specific OAuth subscription (worker1 / worker2).
+#
+# ChatGPT OAuth via 'chatgpt/' provider is actually the Codex CLI backend,
+# which OpenAI restricts to a small model subset. As of 2026-04-21 only
+# gpt-5.4 and gpt-5.2 are reachable that way (Codex rejects everything
+# else with 'not supported when using Codex with a ChatGPT account').
+# To expose gpt-4.5 / gpt-5 / 4o / o3 / o4 etc., register an 'openai/'
+# provider with an api.openai.com API key (pay-per-token; NOT included
+# in a ChatGPT subscription).
 
 model_list:
 - model_name: claude-opus-4-7
@@ -126,6 +131,11 @@ model_list:
     model: openai/glm-4.5v
     api_base: https://api.z.ai/api/coding/paas/v4
     api_key: os.environ/ZAI_API_KEY
+- model_name: gpt-5.2
+  model_info:
+    mode: responses
+  litellm_params:
+    model: chatgpt/gpt-5.2
 router_settings:
   routing_strategy: simple-shuffle
   num_retries: 1
