@@ -156,8 +156,17 @@ async def messages(request: Request) -> Response:
         headers = _build_headers(dict(request.headers), token)
         r = await client.post("/v1/messages", content=body, headers=headers)
 
-    # Pass through upstream body + status verbatim
-    excluded_resp_headers = {"content-length", "transfer-encoding", "connection"}
+    # Pass through upstream body + status verbatim. Drop hop-by-hop headers
+    # AND content-encoding/content-length: httpx auto-decoded the body, so the
+    # raw bytes are no longer compressed. If we left "content-encoding: gzip"
+    # on the response, the caller would try to decompress plaintext and fail
+    # with "zlib: incorrect header check".
+    excluded_resp_headers = {
+        "content-length",
+        "content-encoding",
+        "transfer-encoding",
+        "connection",
+    }
     resp_headers = {
         k: v for k, v in r.headers.items() if k.lower() not in excluded_resp_headers
     }

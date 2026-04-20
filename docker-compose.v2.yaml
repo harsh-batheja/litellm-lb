@@ -46,8 +46,9 @@ services:
 
   router:
     # Use the upstream LiteLLM image directly now that we don't need a custom
-    # provider baked in. Pin to a known-working version.
-    image: ghcr.io/berriai/litellm:main-v1.83.10
+    # provider baked in. `main-stable` is the Berri-maintained rolling stable
+    # tag; pin to a specific digest for reproducibility in production.
+    image: ghcr.io/berriai/litellm:main-stable
     restart: unless-stopped
     ports:
       - "4000:4000"
