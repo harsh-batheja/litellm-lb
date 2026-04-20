@@ -2,10 +2,8 @@
 # ~150 MB image vs ~1.5 GB for the v1 worker.
 FROM python:3.11-slim
 
-RUN pip install --no-cache-dir \
-      'fastapi==0.115.*' \
-      'uvicorn[standard]==0.32.*' \
-      'httpx==0.27.*'
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
 
 RUN useradd -u 1000 -m -s /bin/bash claude
 USER claude
