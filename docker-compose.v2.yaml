@@ -1,0 +1,75 @@
+# v2 stack — slim FastAPI workers instead of nested LiteLLM.
+#
+# Runs alongside v1 if you bring both up in the same directory (different
+# project name via COMPOSE_PROJECT_NAME=litellm-lb-v2 or rename services).
+# For a clean cutover, shut down v1 first: `docker compose down` in the root
+# compose, then `docker compose -f docker-compose.v2.yaml up -d` here.
+#
+# Router port exposed on 4000 identical to v1, so consumer configs don't change.
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: litellm
+    volumes:
+      - litellm-db-v2:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  worker1:
+    image: litellm-lb-oauth-proxy:local
+    build:
+      context: ./worker-image-v2
+    restart: unless-stopped
+    volumes:
+      - worker1-claude:/home/claude/.claude
+    # Optional: set to rebind creds on first boot from an env token
+    environment:
+      LOG_LEVEL: INFO
+
+  worker2:
+    image: litellm-lb-oauth-proxy:local
+    build:
+      context: ./worker-image-v2
+    restart: unless-stopped
+    volumes:
+      - worker2-claude:/home/claude/.claude
+    environment:
+      LOG_LEVEL: INFO
+
+  router:
+    # Use the upstream LiteLLM image directly now that we don't need a custom
+    # provider baked in. Pin to a known-working version.
+    image: ghcr.io/berriai/litellm:main-v1.83.10
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD}@db:5432/litellm
+      STORE_MODEL_IN_DB: "True"
+      ZAI_API_KEY: ${ZAI_API_KEY}
+      CHATGPT_TOKEN_DIR: /app/chatgpt-data
+    volumes:
+      - ./config-router.v2.yaml:/app/config.yaml:ro
+      - ./chatgpt-data:/app/chatgpt-data
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    depends_on:
+      db:
+        condition: service_healthy
+      worker1:
+        condition: service_started
+      worker2:
+        condition: service_started
+
+volumes:
+  litellm-db-v2:
+  worker1-claude:
+  worker2-claude:
