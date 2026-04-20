@@ -13,6 +13,7 @@ CLI just refreshed but we cached the stale token.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -67,7 +68,6 @@ def _build_headers(incoming: Dict[str, str], token: str) -> Dict[str, str]:
     return fwd
 
 
-app = FastAPI(title="claude-oauth-proxy", version="2.0.0")
 # Shared client, long-lived. httpx reuses connections.
 _client: Optional[httpx.AsyncClient] = None
 
@@ -84,19 +84,10 @@ def _get_client() -> httpx.AsyncClient:
     return _client
 
 
-@app.on_event("shutdown")
-async def _shutdown() -> None:
-    global _client
-    if _client is not None:
-        await _client.aclose()
-        _client = None
-
-
-@app.on_event("startup")
-async def _startup() -> None:
-    # Fail fast if we can't read the creds file
+@contextlib.asynccontextmanager
+async def _lifespan(_: FastAPI):
     try:
-        _ = _read_token()
+        _read_token()
         log.info(
             "oauth-proxy ready — creds=%s upstream=%s beta=%s",
             CREDENTIALS_PATH,
@@ -106,6 +97,16 @@ async def _startup() -> None:
     except Exception as exc:
         log.error("startup: cannot read %s: %s", CREDENTIALS_PATH, exc)
         raise
+    try:
+        yield
+    finally:
+        global _client
+        if _client is not None:
+            await _client.aclose()
+            _client = None
+
+
+app = FastAPI(title="claude-oauth-proxy", version="2.0.0", lifespan=_lifespan)
 
 
 @app.get("/health/liveliness")
