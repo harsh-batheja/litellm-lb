@@ -1,0 +1,18 @@
+model_list:
+  - model_name: "sonnet"
+    litellm_params:
+      model: "claude-agent-sdk/sonnet"
+  - model_name: "opus"
+    litellm_params:
+      model: "claude-agent-sdk/opus"
+  - model_name: "haiku"
+    litellm_params:
+      model: "claude-agent-sdk/haiku"
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+litellm_settings:
+  drop_params: true
+  custom_provider_map:
+    - {"provider": "claude-agent-sdk", "custom_handler": "providers.claude_agent_provider.claude_agent_provider"}

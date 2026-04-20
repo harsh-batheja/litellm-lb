@@ -1,0 +1,63 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: litellm
+    volumes:
+      - litellm-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  worker1:
+    image: litellm-lb-worker:local
+    env_file: .env.worker1
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+    volumes:
+      - ./config-worker.yaml:/app/config/litellm_config.yaml:ro
+      - worker1-claude:/home/claude/.claude
+    restart: unless-stopped
+
+  worker2:
+    image: litellm-lb-worker:local
+    env_file: .env.worker2
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+    volumes:
+      - ./config-worker.yaml:/app/config/litellm_config.yaml:ro
+      - worker2-claude:/home/claude/.claude
+    restart: unless-stopped
+
+  router:
+    image: litellm-lb-worker:local
+    ports:
+      - "4000:4000"
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD}@db:5432/litellm
+      STORE_MODEL_IN_DB: "True"
+      ZAI_API_KEY: ${ZAI_API_KEY}
+      CHATGPT_TOKEN_DIR: /home/claude/.chatgpt
+      LITELLM_LOG: INFO
+    volumes:
+      - ./config-router.yaml:/app/config/litellm_config.yaml:ro
+      - ./chatgpt-data:/home/claude/.chatgpt:rw
+    depends_on:
+      db:
+        condition: service_healthy
+      worker1:
+        condition: service_started
+      worker2:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  litellm-db:
+  worker1-claude:
+  worker2-claude:

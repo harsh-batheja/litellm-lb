@@ -1,0 +1,219 @@
+model_list:
+  # Claude via workers (round-robin)
+  - model_name: "sonnet"
+    litellm_params:
+      model: "openai/sonnet"
+      api_base: http://worker1:4000
+      api_key: os.environ/LITELLM_MASTER_KEY
+
+  - model_name: "sonnet"
+    litellm_params:
+      model: "openai/sonnet"
+      api_base: http://worker2:4000
+      api_key: os.environ/LITELLM_MASTER_KEY
+
+  - model_name: "opus"
+    litellm_params:
+      model: "openai/opus"
+      api_base: http://worker1:4000
+      api_key: os.environ/LITELLM_MASTER_KEY
+
+  - model_name: "opus"
+    litellm_params:
+      model: "openai/opus"
+      api_base: http://worker2:4000
+      api_key: os.environ/LITELLM_MASTER_KEY
+
+  - model_name: "haiku"
+    litellm_params:
+      model: "openai/haiku"
+      api_base: http://worker1:4000
+      api_key: os.environ/LITELLM_MASTER_KEY
+
+  - model_name: "haiku"
+    litellm_params:
+      model: "openai/haiku"
+      api_base: http://worker2:4000
+      api_key: os.environ/LITELLM_MASTER_KEY
+
+  - model_name: "claude-opus-4-7"
+    litellm_params:
+      model: "openai/opus"
+      api_base: http://worker1:4000
+      api_key: os.environ/LITELLM_MASTER_KEY
+
+  - model_name: "claude-opus-4-7"
+    litellm_params:
+      model: "openai/opus"
+      api_base: http://worker2:4000
+      api_key: os.environ/LITELLM_MASTER_KEY
+
+  - model_name: "claude-sonnet-4-6"
+    litellm_params:
+      model: "openai/sonnet"
+      api_base: http://worker1:4000
+      api_key: os.environ/LITELLM_MASTER_KEY
+
+  - model_name: "claude-sonnet-4-6"
+    litellm_params:
+      model: "openai/sonnet"
+      api_base: http://worker2:4000
+      api_key: os.environ/LITELLM_MASTER_KEY
+
+  - model_name: "claude-haiku-4-5"
+    litellm_params:
+      model: "openai/haiku"
+      api_base: http://worker1:4000
+      api_key: os.environ/LITELLM_MASTER_KEY
+
+  - model_name: "claude-haiku-4-5"
+    litellm_params:
+      model: "openai/haiku"
+      api_base: http://worker2:4000
+      api_key: os.environ/LITELLM_MASTER_KEY
+
+  - model_name: "claude-opus-4-7-a"
+    litellm_params:
+      model: "openai/opus"
+      api_base: http://worker1:4000
+      api_key: os.environ/LITELLM_MASTER_KEY
+
+  - model_name: "claude-opus-4-7-b"
+    litellm_params:
+      model: "openai/opus"
+      api_base: http://worker2:4000
+      api_key: os.environ/LITELLM_MASTER_KEY
+
+  - model_name: "claude-sonnet-4-6-a"
+    litellm_params:
+      model: "openai/sonnet"
+      api_base: http://worker1:4000
+      api_key: os.environ/LITELLM_MASTER_KEY
+
+  - model_name: "claude-sonnet-4-6-b"
+    litellm_params:
+      model: "openai/sonnet"
+      api_base: http://worker2:4000
+      api_key: os.environ/LITELLM_MASTER_KEY
+
+  - model_name: "claude-haiku-4-5-a"
+    litellm_params:
+      model: "openai/haiku"
+      api_base: http://worker1:4000
+      api_key: os.environ/LITELLM_MASTER_KEY
+
+  - model_name: "claude-haiku-4-5-b"
+    litellm_params:
+      model: "openai/haiku"
+      api_base: http://worker2:4000
+      api_key: os.environ/LITELLM_MASTER_KEY
+
+  # Z.AI (direct, no workers needed)
+  - model_name: "glm"
+    litellm_params:
+      model: "openai/glm-5.1"
+      api_base: "https://api.z.ai/api/coding/paas/v4"
+      api_key: "os.environ/ZAI_API_KEY"
+
+  - model_name: "glm-5.1"
+    litellm_params:
+      model: "openai/glm-5.1"
+      api_base: "https://api.z.ai/api/coding/paas/v4"
+      api_key: "os.environ/ZAI_API_KEY"
+
+  - model_name: "glm-5-turbo"
+    litellm_params:
+      model: "openai/glm-5-turbo"
+      api_base: "https://api.z.ai/api/coding/paas/v4"
+      api_key: "os.environ/ZAI_API_KEY"
+
+  - model_name: "glm-4.7"
+    litellm_params:
+      model: "openai/glm-4.7"
+      api_base: "https://api.z.ai/api/coding/paas/v4"
+      api_key: "os.environ/ZAI_API_KEY"
+
+  - model_name: "glm-4.6"
+    litellm_params:
+      model: "openai/glm-4.6"
+      api_base: "https://api.z.ai/api/coding/paas/v4"
+      api_key: "os.environ/ZAI_API_KEY"
+
+  - model_name: "glm-4.5-air"
+    litellm_params:
+      model: "openai/glm-4.5-air"
+      api_base: "https://api.z.ai/api/coding/paas/v4"
+      api_key: "os.environ/ZAI_API_KEY"
+
+  - model_name: "glm-4.5-flash"
+    litellm_params:
+      model: "openai/glm-4.5-flash"
+      api_base: "https://api.z.ai/api/coding/paas/v4"
+      api_key: "os.environ/ZAI_API_KEY"
+
+  - model_name: "glm-5"
+    litellm_params:
+      model: "openai/glm-5"
+      api_base: "https://api.z.ai/api/coding/paas/v4"
+      api_key: "os.environ/ZAI_API_KEY"
+
+  - model_name: "glm-4.7-flash"
+    litellm_params:
+      model: "openai/glm-4.7-flash"
+      api_base: "https://api.z.ai/api/coding/paas/v4"
+      api_key: "os.environ/ZAI_API_KEY"
+
+  - model_name: "glm-4.7-flashx"
+    litellm_params:
+      model: "openai/glm-4.7-flashx"
+      api_base: "https://api.z.ai/api/coding/paas/v4"
+      api_key: "os.environ/ZAI_API_KEY"
+
+  - model_name: "glm-4.6v"
+    litellm_params:
+      model: "openai/glm-4.6v"
+      api_base: "https://api.z.ai/api/coding/paas/v4"
+      api_key: "os.environ/ZAI_API_KEY"
+
+  - model_name: "glm-4.5"
+    litellm_params:
+      model: "openai/glm-4.5"
+      api_base: "https://api.z.ai/api/coding/paas/v4"
+      api_key: "os.environ/ZAI_API_KEY"
+
+  - model_name: "glm-4.5v"
+    litellm_params:
+      model: "openai/glm-4.5v"
+      api_base: "https://api.z.ai/api/coding/paas/v4"
+      api_key: "os.environ/ZAI_API_KEY"
+
+  # OpenAI ChatGPT OAuth (direct)
+  - model_name: "gpt"
+    model_info:
+      mode: responses
+    litellm_params:
+      model: "chatgpt/gpt-5.4"
+
+  - model_name: "gpt-5.4"
+    model_info:
+      mode: responses
+    litellm_params:
+      model: "chatgpt/gpt-5.4"
+
+router_settings:
+  routing_strategy: "simple-shuffle"
+  num_retries: 1
+  retry_after: 0
+  allowed_fails: 1
+  cooldown_time: 1800
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+litellm_settings:
+  drop_params: true
+  # Phase 2 observability: emit Prometheus metrics on /metrics
+  # (scraped by Prometheus on CT118 using virtual key alias prometheus-scraper).
+  success_callback: ["prometheus"]
+  failure_callback: ["prometheus"]
+  service_callback: ["prometheus_system"]
