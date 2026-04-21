@@ -1,14 +1,15 @@
-# LiteLLM router config. Models expose canonical upstream names only —
-# short aliases removed per team policy. '-a' / '-b' suffixes pin to a
-# specific OAuth subscription (worker1 / worker2).
+# LiteLLM router config. Canonical upstream model names only — no short aliases.
+# '-a' / '-b' suffixes pin to a specific OAuth subscription (worker1 / worker2).
 #
-# ChatGPT OAuth via 'chatgpt/' provider is actually the Codex CLI backend,
-# which OpenAI restricts to a small model subset. As of 2026-04-21 only
-# gpt-5.4 and gpt-5.2 are reachable that way (Codex rejects everything
-# else with 'not supported when using Codex with a ChatGPT account').
-# To expose gpt-4.5 / gpt-5 / 4o / o3 / o4 etc., register an 'openai/'
-# provider with an api.openai.com API key (pay-per-token; NOT included
-# in a ChatGPT subscription).
+# ChatGPT via 'chatgpt/' is the Codex CLI OAuth backend. Empirical probe of
+# ~40 candidate model names on 2026-04-21 returned exactly 4 working entries:
+#   gpt-5.4          — current Codex primary
+#   gpt-5.4-mini     — smaller/faster sibling
+#   gpt-5.3-codex    — Codex-tuned 5.3 variant
+#   gpt-5.2          — previous primary
+# Everything else (gpt-5, gpt-4.5, 4o, o1/o3/o4) fails with 'not supported
+# when using Codex with a ChatGPT account'. For the full OpenAI catalog,
+# register an 'openai/' provider block with an api.openai.com API key.
 
 model_list:
 - model_name: claude-opus-4-7
@@ -131,6 +132,21 @@ model_list:
     model: openai/glm-4.5v
     api_base: https://api.z.ai/api/coding/paas/v4
     api_key: os.environ/ZAI_API_KEY
+- model_name: gpt-5.4
+  model_info:
+    mode: responses
+  litellm_params:
+    model: chatgpt/gpt-5.4
+- model_name: gpt-5.4-mini
+  model_info:
+    mode: responses
+  litellm_params:
+    model: chatgpt/gpt-5.4-mini
+- model_name: gpt-5.3-codex
+  model_info:
+    mode: responses
+  litellm_params:
+    model: chatgpt/gpt-5.3-codex
 - model_name: gpt-5.2
   model_info:
     mode: responses
