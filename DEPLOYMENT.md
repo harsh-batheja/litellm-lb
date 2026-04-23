@@ -188,6 +188,47 @@ pays full input cost, but the user is unblocked.
 the pool for 30 minutes once `allowed_fails` (currently 1) is tripped —
 prevents rapid hot-looping against a rate-limited sub.
 
+### 3.2 Worker ↔ Anthropic auth swap (`worker-image/oauth_proxy.py`)
+
+Once the router has picked a worker, the worker turns the incoming request
+into something Anthropic accepts from an OAuth subscription. It does no
+format translation, no model rewriting, no prompt injection — strictly
+header manipulation.
+
+On each request the worker:
+
+1. **Strips** the incoming `Authorization`, `x-api-key`, and `Host` headers
+   (the router's dummy key, the router's hostname, and any leftover client
+   auth). Hop-by-hop headers (`content-length`, `connection`,
+   `accept-encoding`, `transfer-encoding`) are also stripped.
+2. **Injects**:
+   - `Authorization: Bearer <access_token>` — read fresh from
+     `/home/claude/.claude/.credentials.json` on every request (no
+     in-memory caching, no refresh logic). Path overridable via
+     `CLAUDE_CREDENTIALS_PATH`.
+   - `anthropic-beta: oauth-2025-04-20` — **required**. Without this
+     header Anthropic rejects OAuth subscription tokens at `/v1/messages`
+     with HTTP 401. The value is an opaque Anthropic feature-flag string
+     originally extracted from the Claude Code CLI bundle; overridable
+     via `CLAUDE_OAUTH_BETA`. If the client already sent an
+     `anthropic-beta` header, this value is appended to the existing
+     comma-separated list rather than replacing it.
+   - `User-Agent: claude-cli/2.1.101 (external)` — impersonates the CLI.
+     Overridable via `CLAUDE_CODE_USER_AGENT`.
+3. **Forwards** the request body verbatim to `api.anthropic.com/v1/messages`
+   and streams the upstream response back.
+
+Subscription credentials are effectively non-expiring — the token in
+`.credentials.json` ships with `expiresAt: 2099-12-31`. If Anthropic ever
+starts rotating subscription tokens, a refresh path hitting
+`https://platform.claude.com/v1/oauth/token` will need to be added.
+
+**Debugging note**: a sudden HTTP 401 from Anthropic on a previously-working
+request almost always means `CLAUDE_OAUTH_BETA` has drifted out of sync
+with what the current Claude Code CLI uses. When the CLI is upgraded on
+the host, grep the new bundle for `oauth-[0-9]{4}-[0-9]{2}-[0-9]{2}` to
+confirm the current value; update the worker env var if it changed.
+
 ## 4. Access control
 
 ### 4.1 SSO login flow
