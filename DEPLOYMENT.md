@@ -8,8 +8,8 @@ the Hetzner host at `91.107.194.138` (DNS: `llm.91-107-194-138.nip.io`).
 _Last reviewed: 2026-04-24._
 
 > **Runtime dependencies.** This stack runs entirely out of files on the
-> Hetzner host — Docker, the three stacks under `/opt`, and the local
-> Postgres. It has no dependency on any external secret store or internal
+> Hetzner host — Docker, the four stacks under `/opt` (§2.2), and the
+> local Postgres. It has no dependency on any external secret store or internal
 > tooling. The external endpoints the running system reaches are:
 >
 > - `api.anthropic.com` — Claude inference (every `claude-*` call)
@@ -91,9 +91,9 @@ nested LiteLLM, prompt-cache benefits).
 - Ubuntu 24.04 LTS, kernel 6.8, Docker 28.x
 - Two OS users: `aoagent` (app / operations, owns `/opt/*` contents), `harsh`
   (admin, in `sudo` / `docker` / `adm`)
-- Live deploy directory is `/opt/litellm-lb/` — a loose copy of this repo
-  (not a git checkout yet, see §6.3). "Loose" means the same files are on
-  disk but there's no `.git/` metadata, so `git status` can't show drift.
+- Live deploy directory is `/opt/litellm-lb/` — a plain copy of this repo
+  with no `.git/` metadata (see §6.3), so `git status` on the server can't
+  show drift.
 
 ### 2.2 Docker stacks under `/opt`
 | Stack | Purpose | Public vhost(s) |
@@ -107,11 +107,11 @@ External listeners: 22 (SSH), 80/443 (Caddy), 9000/9443 (Portainer). All
 inter-container traffic runs on internal Docker networks.
 
 ### 2.3 LiteLLM router stack (`litellm-lb`)
-Containers:
-- `litellm-lb-router-1` — `ghcr.io/berriai/litellm:main-stable`, listens `:4000`
+Containers (all internal-only; Caddy is the only externally-reachable
+listener):
+- `litellm-lb-router-1` — `ghcr.io/berriai/litellm:main-stable`, port `:4000`
 - `litellm-lb-worker1-1`, `litellm-lb-worker2-1` —
-  `litellm-lb-oauth-proxy:local` (built from `worker-image/`),
-  each `:4000` internal-only
+  `litellm-lb-oauth-proxy:local` built from `worker-image/`, each port `:4000`
 - `litellm-lb-db-1` — `postgres:16`
 
 Key router mounts (`docker-compose.yaml`):
@@ -162,8 +162,10 @@ if model in {claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5}:
 Effect:
 - Same user consistently lands on the same worker / OAuth subscription →
   Anthropic's per-org prompt cache hits across multi-turn sessions.
-- Different users deterministically spread across the two workers →
-  aggregate subscription quota is used evenly.
+- Over many users the hash spreads ~50/50, so aggregate subscription quota
+  is used evenly on average. At small team sizes the variance matters:
+  with three members there's roughly a 1-in-4 chance all three hash to the
+  same worker until a fourth user joins.
 - `-a` routes to `worker1`, `-b` routes to `worker2` (hard-coded in
   `model_list`).
 
@@ -279,8 +281,7 @@ itself. An operator does **not** need to configure an external secret store.
 
 An operator needs, separately, their own copies of:
 - SSH key or password for `harsh@91.107.194.138` (to edit anything)
-- `LITELLM_MASTER_KEY` (for admin calls to LiteLLM — everything in this
-  section that isn't `sudo` or SSH)
+- `LITELLM_MASTER_KEY` (for every admin API call to LiteLLM in this section)
 - Authentik admin token (for policy changes — §5.9)
 
 These can live in whatever secret store the operator prefers; how they're
@@ -346,15 +347,17 @@ curl https://llm.91-107-194-138.nip.io/v1/messages \
 Edit `/opt/litellm-lb/config-router.yaml`. For a simple direct-to-provider
 model, append one block to `model_list:` (see existing `glm-*` or `gpt-*`
 entries as templates). For a Claude model that should get sticky-routing +
-failover, add **four** entries: two unsuffixed (routed by the hook) and two
-`-a`/`-b` pairs pinned to the workers. If the new provider needs fresh
-credentials, add them to `/opt/litellm-lb/.env`.
+failover, add **four** entries: two with the unsuffixed `model_name` (one
+per worker, for the hook to route between), one `-a` entry pinned to
+`worker1`, and one `-b` entry pinned to `worker2`. If the new provider
+needs fresh credentials, add them to `/opt/litellm-lb/.env`.
 
 Also extend `litellm_settings.default_internal_user_params.models` so
 existing SSO users see the new model on their next `/v1/models` call.
 Already-issued virtual keys are unaffected unless updated via `/key/update`.
 
-Restart path in §5.7.
+Apply with `sudo docker compose up -d --force-recreate router` (full
+restart recipe in §5.7).
 
 ### 5.5 Revoke a user
 ```bash
@@ -509,7 +512,7 @@ Persistent (known bugs / design limits):
 - **GPT prompt inflation** — LiteLLM's `chatgpt/` provider unconditionally
   prepends the Codex CLI system prompt (~1.6 k tokens, 1.28 k of which are
   cached). No dollar cost on the subscription path, but Codex subscription
-  quota burns faster. A real Codex CLI client pointed at this LB would pay
+  quota burns faster. A real Codex CLI client pointed at this LB would send
   the prompt roughly **twice** — once by LiteLLM's unconditional injection,
   once by its own. Recommendation: don't point the Codex CLI at this LB;
   use it directly against OpenAI. Fix would require forking the chatgpt
