@@ -1,21 +1,21 @@
-name: worker-v2 CI
+name: CI
 
 on:
   push:
     paths:
-      - "worker-image-v2/**"
-      - ".github/workflows/worker-v2-ci.yml"
+      - "worker-image/**"
+      - ".github/workflows/ci.yml"
   pull_request:
     paths:
-      - "worker-image-v2/**"
-      - ".github/workflows/worker-v2-ci.yml"
+      - "worker-image/**"
+      - ".github/workflows/ci.yml"
 
 jobs:
   tests:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: worker-image-v2
+        working-directory: worker-image
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -37,7 +37,7 @@ jobs:
       - name: Build worker image
         uses: docker/build-push-action@v6
         with:
-          context: worker-image-v2
+          context: worker-image
           push: false
           tags: litellm-lb-oauth-proxy:ci
           cache-from: type=gha
