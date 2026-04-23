@@ -10,11 +10,19 @@ _Last reviewed: 2026-04-24._
 > **Runtime dependencies.** This stack runs entirely out of files on the
 > Hetzner host — Docker, the three stacks under `/opt`, and the local
 > Postgres. It has no dependency on any external secret store or internal
-> tooling. The **only** things the running system reads from off-box are
-> `api.anthropic.com` (Claude), `api.z.ai` (GLM), and `api.github.com`
-> (the gh-collab-gate policy call during SSO). All secrets the runtime needs
-> are on-disk in the container `.env` files and the Authentik policy
-> expression.
+> tooling. The external endpoints the running system reaches are:
+>
+> - `api.anthropic.com` — Claude inference (every `claude-*` call)
+> - `api.z.ai` — GLM inference (every `glm-*` call)
+> - `chatgpt.com/backend-api/codex/` and `auth.openai.com` — ChatGPT /
+>   Codex inference + OAuth refresh (every `gpt-*` call)
+> - `api.github.com` — the gh-collab-gate policy call on each SSO login
+> - `github.com/login/oauth/*` — GitHub OAuth App callback during SSO
+> - `acme-v02.api.letsencrypt.org` — Caddy's TLS certificate issuance /
+>   renewal
+>
+> All secrets the runtime needs are on-disk in the container `.env` files
+> and the Authentik policy expression.
 
 ## 1. High-level picture
 
@@ -112,7 +120,7 @@ Key router mounts (`docker-compose.yaml`):
 |---|---|
 | `./config-router.yaml` → `/app/config.yaml` | Model list, routing strategy, fallbacks, callbacks, default user scope. The main operator-editable file. |
 | `./sticky_router.py` → `/app/sticky_router.py` | Registered as `litellm_settings.callbacks`. Runs before every request (§3). |
-| `./chatgpt-data/auth.json` → `/app/chatgpt-data/auth.json` | ChatGPT OAuth token used by the `chatgpt/*` models (Codex backend). Git-ignored. |
+| `./chatgpt-data` → `/app/chatgpt-data` (directory) | Holds `auth.json`, the ChatGPT OAuth token used by the `chatgpt/*` models (Codex backend). Git-ignored. |
 | `./ui-btn-patched.js` → `/usr/lib/python3.13/site-packages/litellm/proxy/_experimental/out/_next/static/chunks/80899acb7e1a7640.js` | In-place patch to the LiteLLM UI bundle. Server-side only; not tracked in git (§6.3). |
 
 Each worker mounts a named volume `workerN-claude` at `/home/claude/.claude/`
@@ -146,8 +154,8 @@ request. It rewrites the three unsuffixed Claude model names into their
 ```
 if model in {claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5}:
     identity = first non-None of (user_id, team_id, api_key, "anon")
-    worker   = "w1" if md5(identity) & 1 == 0 else "w2"
-    suffix   = "-a" if worker == "w1" else "-b"
+    h        = int(md5(identity).hexdigest(), 16)   # hex → int
+    suffix   = "-a" if (h & 1) == 0 else "-b"       # low bit picks worker
     data["model"] = model + suffix
 ```
 
@@ -174,8 +182,8 @@ is a cache miss on the alternate subscription, so the first fallback request
 pays full input cost, but the user is unblocked.
 
 `cooldown_time: 1800` in `router_settings` pulls a failed deployment out of
-the pool for 30 minutes after `allowed_fails: 1` failures — prevents rapid
-hot-looping against a rate-limited sub.
+the pool for 30 minutes once `allowed_fails` (currently 1) is tripped —
+prevents rapid hot-looping against a rate-limited sub.
 
 ## 4. Access control
 
@@ -227,7 +235,7 @@ Bound at two points:
 **The PAT used for the API call is inlined in the policy expression itself**
 — the Authentik DB is the system of record. Any Authentik admin can view /
 rotate it through the admin UI or `PATCH /api/v3/policies/expression/<pk>/`.
-See §5.8 for the rotation recipe.
+See §5.9 for the rotation recipe.
 
 ### 4.3 Scoped virtual keys — the 19 public models
 
@@ -258,22 +266,22 @@ access *before* `async_pre_call_hook`.
 ## 5. Operations
 
 ### 5.1 Where secrets live on the server
-The runtime reads all its secrets from three on-disk locations. An operator
-does **not** need to configure an external secret store.
+The runtime reads all its secrets from on-disk locations owned by the host
+itself. An operator does **not** need to configure an external secret store.
 
 | Location | Keys |
 |---|---|
 | `/opt/litellm-lb/.env` (root-owned, mode 600) | `LITELLM_MASTER_KEY`, `POSTGRES_PASSWORD`, `ZAI_API_KEY`, and the OIDC connection settings that point LiteLLM at Authentik (endpoints, client id, client secret). |
 | `/opt/authentik/.env` (root-owned, mode 600) | Authentik's bootstrap secrets (admin password, postgres password, `AUTHENTIK_SECRET_KEY`). |
 | `/opt/litellm-lb/chatgpt-data/auth.json` (aoagent-owned, mode 600, git-ignored) | Codex CLI OAuth token used by the `chatgpt/*` models. |
-| Inline in the Authentik `gh-collab-gate` policy expression | The GitHub PAT the policy uses at login time. Source of truth; rotate via §5.8. |
+| Inline in the Authentik `gh-collab-gate` policy expression | The GitHub PAT the policy uses at login time. Source of truth; rotate via §5.9. |
 | Docker named volumes `worker1-claude`, `worker2-claude` | Each worker's Claude subscription credentials (`/home/claude/.claude/.credentials.json`). |
 
 An operator needs, separately, their own copies of:
 - SSH key or password for `harsh@91.107.194.138` (to edit anything)
 - `LITELLM_MASTER_KEY` (for admin calls to LiteLLM — everything in this
   section that isn't `sudo` or SSH)
-- Authentik admin token (for policy changes — §5.8)
+- Authentik admin token (for policy changes — §5.9)
 
 These can live in whatever secret store the operator prefers; how they're
 kept is not the deployment's concern.
@@ -451,10 +459,10 @@ Plan:
   bugs.
 
 ### 6.3 `/opt/litellm-lb` drift vs. the repo
-The server directory is a loose copy of `github.com/harsh-batheja/litellm-lb`
-without a `.git/` inside. Currently-open PR #1 (`deploy/sticky-router`)
-brings the repo in sync with the server for the pieces that belong in
-version control. Next steps:
+The server directory is a copy of `github.com/harsh-batheja/litellm-lb`
+without a `.git/` inside. PR #1 (`deploy/sticky-router`, open at the time of
+writing) brings the repo in sync with the server for the pieces that belong
+in version control. Next steps:
 - Merge PR #1 into `main`.
 - Convert `/opt/litellm-lb` into a tracking checkout (`git init` + `git
   remote add` + `git reset --mixed origin/main`), OR switch to a
