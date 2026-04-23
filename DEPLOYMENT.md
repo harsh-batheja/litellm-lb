@@ -229,6 +229,71 @@ with what the current Claude Code CLI uses. When the CLI is upgraded on
 the host, grep the new bundle for `oauth-[0-9]{4}-[0-9]{2}-[0-9]{2}` to
 confirm the current value; update the worker env var if it changed.
 
+### 3.3 End-to-end request flow
+
+Concrete walk-through of a single `claude-opus-4-7` call from a client to
+Anthropic and back. The numbered steps match the logic already described
+in §3, §3.1, §3.2 — this diagram is the assembled view.
+
+```
+client                POST /v1/messages
+   │                   Authorization: Bearer sk-…       (virtual key)
+   │                   Content-Type: application/json
+   │                   { "model": "claude-opus-4-7",
+   │                     "messages": [...] }
+   │
+   │ HTTPS :443
+   ▼
+Caddy  (gateway-caddy-1)
+   │   TLS termination → reverse_proxy to router:4000
+   │
+   │ HTTP :4000  (internal docker network)
+   ▼
+LiteLLM router  (litellm-lb-router-1)
+   │
+   │  (1) AUTH     Look up sk-… in postgres (60 s cache). 401 if the key
+   │               is revoked, the user is blocked, or it has expired.
+   │
+   │  (2) SCOPE    Is `claude-opus-4-7` in this key's allowed_models?
+   │               403 if not (also what guards the internal -a / -b
+   │               names from direct client access).
+   │
+   │  (3) STICKY   sticky_router.async_pre_call_hook rewrites
+   │               data["model"] → "claude-opus-4-7-a" based on
+   │               md5(user_id) & 1.
+   │
+   │  (4) ROUTE    Deployment claude-opus-4-7-a points at worker1.
+   │               On 429 / 5xx / timeout, falls back to -b (worker2)
+   │               via router_settings.fallbacks.
+   │
+   │ HTTP :4000  (internal docker network)
+   ▼
+Worker  (litellm-lb-worker1-1, oauth_proxy.py)
+   │
+   │  (5) STRIP    Incoming Authorization, x-api-key, Host, plus the
+   │               hop-by-hop headers (content-length, connection, …).
+   │
+   │  (6) INJECT   Authorization: Bearer <access_token from
+   │                   /home/claude/.claude/.credentials.json>
+   │               anthropic-beta: <existing>,oauth-2025-04-20
+   │               User-Agent: claude-cli/2.1.101 (external)
+   │
+   │  (7) FORWARD  Body is passed through verbatim — no format
+   │               translation, no prompt mutation.
+   │
+   │ HTTPS :443
+   ▼
+api.anthropic.com/v1/messages
+   │   Validates the OAuth bearer against this worker's subscription.
+   │   Serves the cached prefix if the prompt matches a prior request
+   │   from the same subscription (the reason we route sticky).
+   │   Streams the model response back.
+   ▼
+(response retraces the path: Anthropic → worker → router → Caddy → client.
+ Router logs spend + tokens asynchronously via the Prometheus callback in
+ success_callback — does not block the response.)
+```
+
 ## 4. Access control
 
 ### 4.1 SSO login flow
