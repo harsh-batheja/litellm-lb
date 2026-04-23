@@ -89,8 +89,9 @@ nested LiteLLM, prompt-cache benefits).
 - IP `91.107.194.138`, Hetzner Cloud vServer, KVM-virtualised
 - 4 vCPU (AMD EPYC), 7.6 GiB RAM, 150 GB disk
 - Ubuntu 24.04 LTS, kernel 6.8, Docker 28.x
-- Two OS users: `aoagent` (app / operations, owns `/opt/*` contents), `harsh`
-  (admin, in `sudo` / `docker` / `adm`)
+- OS users: `aoagent` (app / operations, owns `/opt/*` contents); an
+  admin user in `sudo` / `docker` / `adm` for anyone who needs to edit
+  config or restart containers
 - Live deploy directory is `/opt/litellm-lb/` — a plain copy of this repo
   with no `.git/` metadata (see §6.3), so `git status` on the server can't
   show drift.
@@ -280,7 +281,7 @@ itself. An operator does **not** need to configure an external secret store.
 | Docker named volumes `worker1-claude`, `worker2-claude` | Each worker's Claude subscription credentials (`/home/claude/.claude/.credentials.json`). |
 
 An operator needs, separately, their own copies of:
-- SSH key or password for `harsh@91.107.194.138` (to edit anything)
+- SSH access to `91.107.194.138` as an admin user (to edit anything)
 - `LITELLM_MASTER_KEY` (for every admin API call to LiteLLM in this section)
 - Authentik admin token (for policy changes — §5.9)
 
@@ -437,12 +438,12 @@ ssh aoagents 'cd /opt/litellm-lb && sudo cp /tmp/good.yaml config-router.yaml \
 
 ## 6. Known gaps / what's left
 
-### 6.1 Policy PAT is tied to one person's CLI token
-The GitHub PAT inside the `gh-collab-gate` policy is currently
-`harsh-batheja`'s personal `gh auth token`, which rotates whenever the
-GitHub CLI refreshes its session. Rotate to a fine-grained repo-scoped PAT
-or a GitHub App installation token — narrower blast radius and decoupled
-from any individual's CLI session. Rotation recipe in §5.9.
+### 6.1 Policy PAT is tied to a personal CLI token
+The GitHub PAT inside the `gh-collab-gate` policy is currently a personal
+`gh auth token` that rotates whenever the GitHub CLI refreshes its session.
+Rotate to a fine-grained repo-scoped PAT or a GitHub App installation
+token — narrower blast radius and decoupled from any individual's CLI
+session. Rotation recipe in §5.9.
 
 ### 6.2 No instant revocation on collaborator removal
 Removing a collaborator on GitHub blocks their **next** SSO login, but
@@ -462,10 +463,10 @@ Plan:
   bugs.
 
 ### 6.3 `/opt/litellm-lb` drift vs. the repo
-The server directory is a copy of `github.com/harsh-batheja/litellm-lb`
-without a `.git/` inside. PR #1 (`deploy/sticky-router`, open at the time of
-writing) brings the repo in sync with the server for the pieces that belong
-in version control. Next steps:
+The server directory is a copy of this repo without a `.git/` inside.
+PR #1 (`deploy/sticky-router`, open at the time of writing) brings the repo
+in sync with the server for the pieces that belong in version control.
+Next steps:
 - Merge PR #1 into `main`.
 - Convert `/opt/litellm-lb` into a tracking checkout (`git init` + `git
   remote add` + `git reset --mixed origin/main`), OR switch to a
@@ -482,9 +483,9 @@ Every step has been verified in isolation:
   `default_internal_user_params`.
 - SSO redirect from LiteLLM returns a valid Authentik URL.
 
-Not yet verified: a GitHub account other than `harsh-batheja` going through
-the full SSO flow — `harsh-batheja` is the only human user in Authentik at
-the time of writing. First real onboarding will exercise:
+Not yet verified: a GitHub account other than the current maintainer's
+going through the full SSO flow — only one human user exists in Authentik
+at the time of writing. First real onboarding will exercise:
 - The Authentik "access denied" page rendering for a policy-denied user.
 - The enrollment flow creating a fresh Authentik user when the gate passes.
 - LiteLLM auto-provisioning with the scoped model list.
@@ -509,14 +510,6 @@ virtual key could burn unlimited quota on any subscription. Add per-user
 Persistent (known bugs / design limits):
 - **GPT non-streaming 500** — documented LiteLLM bug; clients must use
   `stream: true` with any `gpt-*` model.
-- **GPT prompt inflation** — LiteLLM's `chatgpt/` provider unconditionally
-  prepends the Codex CLI system prompt (~1.6 k tokens, 1.28 k of which are
-  cached). No dollar cost on the subscription path, but Codex subscription
-  quota burns faster. A real Codex CLI client pointed at this LB would send
-  the prompt roughly **twice** — once by LiteLLM's unconditional injection,
-  once by its own. Recommendation: don't point the Codex CLI at this LB;
-  use it directly against OpenAI. Fix would require forking the chatgpt
-  provider or waiting for an upstream patch.
 
 Transient (may self-heal):
 - **GLM long-output latency** — `glm-*` models on `api.z.ai` occasionally
@@ -525,9 +518,8 @@ Transient (may self-heal):
 
 ## 7. Repo ↔ server relationship
 
-- **Repo** (`github.com/harsh-batheja/litellm-lb`): canonical. Owns the
-  worker image build, the router config template, the sticky hook, the
-  compose file, this document.
+- **Repo** (this one): canonical. Owns the worker image build, the router
+  config template, the sticky hook, the compose file, this document.
 - **Server** (`/opt/litellm-lb/`): the same files plus deployment-specific
   artefacts — `.env` with real secrets, `chatgpt-data/auth.json` with the
   Codex OAuth token, `ui-btn-patched.js` for a router UI patch.
@@ -540,7 +532,6 @@ done, `git pull` on the server becomes the deploy primitive and
 
 ---
 
-**Maintainers**: `harsh-batheja` (primary). Collaborators on
-`ComposioHQ/agent-orchestrator` inherit LiteLLM access via the
-gh-collab-gate policy; the access list lives in GitHub, not in this repo
-or Authentik.
+Collaborators on `ComposioHQ/agent-orchestrator` inherit LiteLLM access via
+the gh-collab-gate policy; the access list lives in GitHub, not in this
+repo or Authentik.
